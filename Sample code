@@ -1,0 +1,1286 @@
+ThemeContext.js
+
+import React, { createContext, useEffect, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+export const ThemeContext = createContext();
+
+export const ThemeProvider = ({ children }) => {
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    const loadTheme = async () => {
+      try {
+        const savedTheme = await AsyncStorage.getItem("theme");
+        if (savedTheme === "dark") {
+          setIsDark(true);
+        }
+      } catch (error) {
+        console.log("THEME LOAD ERROR:", error);
+      }
+    };
+
+    loadTheme();
+  }, []);
+
+  const toggleTheme = async () => {
+    try {
+      const newTheme = !isDark;
+      setIsDark(newTheme);
+      await AsyncStorage.setItem("theme", newTheme ? "dark" : "light");
+    } catch (error) {
+      console.log("THEME SAVE ERROR:", error);
+    }
+  };
+
+  return (
+    <ThemeContext.Provider value={{ isDark, toggleTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+};
+
+
+
+
+LoginScreen.js
+
+
+
+// screens/LoginScreen.js
+
+import React, { useRef, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Alert,
+} from "react-native";
+
+import { useRouter } from "expo-router";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
+
+import { auth, db } from "../firebaseConfig";
+
+export default function Login() {
+  const router = useRouter();
+
+  const passwordRef = useRef(null);
+
+  const [selectedRole, setSelectedRole] = useState("tenant");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [emailValid, setEmailValid] = useState(true);
+
+  const validateEmail = (text) => {
+    setEmail(text);
+
+    if (!text.trim()) {
+      setEmailValid(true);
+      return;
+    }
+
+    const regex = /\S+@\S+\.\S+/;
+    setEmailValid(regex.test(text));
+  };
+
+  const isFormValid = email.trim() && password.trim() && emailValid;
+
+  const handleLogin = async () => {
+    if (loading) return;
+
+    if (!email.trim() || !password.trim()) {
+      Alert.alert("Missing Details", "Please enter email and password.");
+      return;
+    }
+
+    if (!emailValid) {
+      Alert.alert("Invalid Email", "Enter a valid email address.");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        email.trim().toLowerCase(),
+        password
+      );
+
+      const uid = userCredential.user.uid;
+
+      const userQuery = query(
+        collection(db, "users"),
+        where("authUserId", "==", uid)
+      );
+
+      const snapshot = await getDocs(userQuery);
+
+      if (snapshot.empty) {
+        Alert.alert("Error", "User profile not found in database.");
+        setLoading(false);
+        return;
+      }
+
+      const userDoc = snapshot.docs[0];
+      const userData = userDoc.data();
+
+      const role = userData.role?.trim().toLowerCase();
+      const selected = selectedRole.trim().toLowerCase();
+
+      if (role !== selected) {
+        Alert.alert(
+          "Wrong Login Type",
+          `This account is registered as ${userData.role}. Please select ${userData.role} login.`
+        );
+        setLoading(false);
+        return;
+      }
+
+      const activePgId = userData.activePgId || userData.pgId || "";
+
+      await AsyncStorage.setItem("userLoggedIn", "true");
+      await AsyncStorage.setItem("userUID", uid);
+      await AsyncStorage.setItem("userDocId", userDoc.id);
+      await AsyncStorage.setItem("userRole", role);
+      await AsyncStorage.setItem("role", role);
+
+      if (activePgId) {
+        await AsyncStorage.setItem("pgId", activePgId);
+        await AsyncStorage.setItem("activePgId", activePgId);
+      } else {
+        await AsyncStorage.removeItem("pgId");
+        await AsyncStorage.removeItem("activePgId");
+      }
+
+      if (userData.pgName) {
+        await AsyncStorage.setItem("pgName", userData.pgName);
+      } else {
+        await AsyncStorage.removeItem("pgName");
+      }
+
+      if (userData.pgThemeColor) {
+        await AsyncStorage.setItem("pgThemeColor", userData.pgThemeColor);
+      } else {
+        await AsyncStorage.removeItem("pgThemeColor");
+      }
+
+      if (role === "owner") {
+        if (activePgId) {
+          router.replace("/owner");
+        } else {
+          router.replace("/createPG");
+        }
+      } else {
+        if (activePgId) {
+          router.replace("/(tabs)");
+        } else {
+          Alert.alert(
+            "PG Not Linked",
+            "Your tenant account is not connected to any PG. Please contact your PG owner for the correct access code."
+          );
+        }
+      }
+    } catch (error) {
+      console.log("LOGIN ERROR:", error);
+      Alert.alert("Login Failed", "Invalid email or password.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.safe}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.card}>
+          <View style={styles.headerIcon}>
+            <Ionicons name="home" size={24} color="#2563EB" />
+          </View>
+
+          <Text style={styles.title}>Welcome Back</Text>
+
+          <Text style={styles.subtitle}>
+            {selectedRole === "tenant"
+              ? "Login to manage your PG life"
+              : "Login to manage your PG business"}
+          </Text>
+
+          <Text style={styles.label}>Login Type</Text>
+
+          <View style={styles.roleContainer}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.roleButton,
+                selectedRole === "tenant" && styles.activeRole,
+              ]}
+              onPress={() => setSelectedRole("tenant")}
+            >
+              <Ionicons
+                name="person-outline"
+                size={17}
+                color={selectedRole === "tenant" ? "#FFFFFF" : "#64748B"}
+              />
+
+              <Text
+                style={[
+                  styles.roleText,
+                  selectedRole === "tenant" && styles.activeRoleText,
+                ]}
+              >
+                Tenant
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.roleButton,
+                selectedRole === "owner" && styles.activeRole,
+              ]}
+              onPress={() => setSelectedRole("owner")}
+            >
+              <Ionicons
+                name="business-outline"
+                size={17}
+                color={selectedRole === "owner" ? "#FFFFFF" : "#64748B"}
+              />
+
+              <Text
+                style={[
+                  styles.roleText,
+                  selectedRole === "owner" && styles.activeRoleText,
+                ]}
+              >
+                Owner
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.label}>Email</Text>
+
+          <TextInput
+            placeholder="e.g. angad@gmail.com"
+            placeholderTextColor="#94A3B8"
+            style={[styles.input, !emailValid && styles.inputError]}
+            value={email}
+            onChangeText={validateEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            returnKeyType="next"
+            onSubmitEditing={() => passwordRef.current?.focus()}
+          />
+
+          {!emailValid && <Text style={styles.error}>Invalid email</Text>}
+
+          <Text style={styles.label}>Password</Text>
+
+          <View style={styles.passwordRow}>
+            <TextInput
+              ref={passwordRef}
+              placeholder="Enter password"
+              placeholderTextColor="#94A3B8"
+              secureTextEntry={!showPassword}
+              style={styles.passwordInput}
+              value={password}
+              onChangeText={setPassword}
+              returnKeyType="done"
+              onSubmitEditing={handleLogin}
+            />
+
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => setShowPassword(!showPassword)}
+            >
+              <Ionicons
+                name={showPassword ? "eye" : "eye-off"}
+                size={22}
+                color="#64748B"
+              />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={[styles.button, (!isFormValid || loading) && styles.disabledButton]}
+            onPress={handleLogin}
+            disabled={!isFormValid || loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.buttonText}>
+                Login as {selectedRole === "owner" ? "Owner" : "Tenant"}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => router.push("/signup")}>
+            <Text style={styles.link}>
+              Don’t have an account? <Text style={styles.bold}>Sign Up</Text>
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+
+  container: {
+    flexGrow: 1,
+    padding: 18,
+    paddingTop: 34,
+    paddingBottom: 70,
+    justifyContent: "center",
+  },
+
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+
+  headerIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 19,
+    backgroundColor: "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    marginBottom: 12,
+  },
+
+  title: {
+    fontSize: 27,
+    fontWeight: "900",
+    textAlign: "center",
+    color: "#0F172A",
+    letterSpacing: -0.7,
+  },
+
+  subtitle: {
+    fontSize: 13,
+    color: "#64748B",
+    textAlign: "center",
+    marginTop: 6,
+    marginBottom: 24,
+    lineHeight: 19,
+    fontWeight: "600",
+  },
+
+  label: {
+    fontSize: 13,
+    marginBottom: 7,
+    color: "#334155",
+    fontWeight: "800",
+  },
+
+  input: {
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 14,
+    height: 49,
+    borderRadius: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+
+  inputError: {
+    borderColor: "#EF4444",
+  },
+
+  roleContainer: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+
+  roleButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+
+  activeRole: {
+    backgroundColor: "#2563EB",
+    borderColor: "#2563EB",
+  },
+
+  roleText: {
+    fontWeight: "900",
+    color: "#475569",
+    fontSize: 13,
+  },
+
+  activeRoleText: {
+    color: "#FFFFFF",
+  },
+
+  passwordRow: {
+    height: 49,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 16,
+    marginBottom: 14,
+    backgroundColor: "#F8FAFC",
+    paddingRight: 13,
+  },
+
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+
+  button: {
+    backgroundColor: "#2563EB",
+    height: 52,
+    borderRadius: 18,
+    marginTop: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  disabledButton: {
+    backgroundColor: "#94A3B8",
+  },
+
+  buttonText: {
+    color: "#FFFFFF",
+    textAlign: "center",
+    fontWeight: "900",
+    fontSize: 15,
+  },
+
+  link: {
+    textAlign: "center",
+    marginTop: 18,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+
+  bold: {
+    fontWeight: "900",
+    color: "#2563EB",
+  },
+
+  error: {
+    color: "#EF4444",
+    marginTop: -8,
+    marginBottom: 10,
+    fontWeight: "700",
+    fontSize: 12,
+  },
+});
+
+
+
+
+SignupScreen.js
+
+
+
+import React, { useRef, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+} from "react-native";
+
+import { useRouter } from "expo-router";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import {
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  addDoc,
+  doc,
+  increment,
+} from "firebase/firestore";
+
+import { auth, db } from "../firebaseConfig";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
+
+export default function Signup() {
+  const router = useRouter();
+
+  const emailRef = useRef(null);
+  const phoneRef = useRef(null);
+  const accessCodeRef = useRef(null);
+  const roomRef = useRef(null);
+  const passwordRef = useRef(null);
+  const confirmPasswordRef = useRef(null);
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [room, setRoom] = useState("");
+  const [phone, setPhone] = useState("");
+  const [accessCode, setAccessCode] = useState("");
+  const [selectedRole, setSelectedRole] = useState("tenant");
+
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [strength, setStrength] = useState("");
+  const [emailValid, setEmailValid] = useState(true);
+
+  const checkStrength = (pass) => {
+    if (pass.length < 6) return "Weak";
+    if (pass.match(/[A-Z]/) && pass.match(/[0-9]/)) return "Strong";
+    return "Medium";
+  };
+
+  const validateEmail = (text) => {
+    setEmail(text);
+    if (!text.trim()) {
+      setEmailValid(true);
+      return;
+    }
+
+    const regex = /\S+@\S+\.\S+/;
+    setEmailValid(regex.test(text));
+  };
+
+  const normalizeAccessCode = (code) => {
+    const clean = code.trim().toUpperCase().replace(/\s+/g, "");
+    if (!clean) return "";
+    if (clean.startsWith("PG-")) return clean;
+    if (clean.startsWith("PG")) return `PG-${clean.slice(2)}`;
+    return clean;
+  };
+
+  const findPGByAccessCode = async (code) => {
+    const finalCode = normalizeAccessCode(code);
+
+    const pgQuery = query(
+      collection(db, "pgs"),
+      where("accessCode", "==", finalCode),
+      where("isActive", "==", true)
+    );
+
+    const pgSnapshot = await getDocs(pgQuery);
+
+    if (pgSnapshot.empty) {
+      return null;
+    }
+
+    const pgDoc = pgSnapshot.docs[0];
+
+    return {
+      id: pgDoc.id,
+      ...pgDoc.data(),
+    };
+  };
+
+  const handleSignup = async () => {
+    if (loading) return;
+
+    if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
+      Alert.alert("Missing Details", "Please fill all required fields.");
+      return;
+    }
+
+    if (!emailValid) {
+      Alert.alert("Invalid Email", "Enter a valid email address.");
+      return;
+    }
+
+    if (selectedRole === "tenant" && !accessCode.trim()) {
+      Alert.alert(
+        "Access Code Required",
+        "Please enter the PG access code shared by your owner."
+      );
+      return;
+    }
+
+    if (selectedRole === "tenant" && !room.trim()) {
+      Alert.alert("Room Required", "Please enter room number.");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert("Password Error", "Passwords do not match.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const cleanName = name.trim();
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanPhone = phone.trim();
+      const cleanRoom = room.trim();
+      const cleanAccessCode = normalizeAccessCode(accessCode);
+
+      let joinedPG = null;
+
+      if (selectedRole === "tenant") {
+        joinedPG = await findPGByAccessCode(cleanAccessCode);
+
+        if (!joinedPG) {
+          Alert.alert(
+            "Invalid Access Code",
+            "No active PG found with this access code. Please check the code and try again."
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
+      );
+
+      const uid = userCredential.user.uid;
+
+      if (selectedRole === "tenant") {
+        const tenantPhoneQuery = query(
+          collection(db, "users"),
+          where("phone", "==", cleanPhone),
+          where("role", "==", "tenant"),
+          where("pgId", "==", joinedPG.id)
+        );
+
+        const tenantPhoneSnapshot = await getDocs(tenantPhoneQuery);
+
+        if (!tenantPhoneSnapshot.empty) {
+          const existingTenantDoc = tenantPhoneSnapshot.docs[0];
+
+          await updateDoc(existingTenantDoc.ref, {
+            authUserId: uid,
+            name: cleanName,
+            email: cleanEmail,
+            phone: cleanPhone,
+            room: cleanRoom,
+            role: "tenant",
+            linkedAccount: true,
+            pgId: joinedPG.id,
+            activePgId: joinedPG.id,
+            pgName: joinedPG.pgName || "",
+            pgAccessCode: cleanAccessCode,
+            pgThemeColor: joinedPG.themeColor || "#2563eb",
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await addDoc(collection(db, "users"), {
+            authUserId: uid,
+            name: cleanName,
+            email: cleanEmail,
+            phone: cleanPhone,
+            room: cleanRoom,
+            role: "tenant",
+            linkedAccount: true,
+            image: "",
+            pgId: joinedPG.id,
+            activePgId: joinedPG.id,
+            pgName: joinedPG.pgName || "",
+            pgAccessCode: cleanAccessCode,
+            pgThemeColor: joinedPG.themeColor || "#2563eb",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+
+          await updateDoc(doc(db, "pgs", joinedPG.id), {
+            totalTenants: increment(1),
+          });
+        }
+
+        await AsyncStorage.setItem("userLoggedIn", "true");
+        await AsyncStorage.setItem("userUID", uid);
+        await AsyncStorage.setItem("userRole", "tenant");
+        await AsyncStorage.setItem("role", "tenant");
+        await AsyncStorage.setItem("pgId", joinedPG.id);
+        await AsyncStorage.setItem("activePgId", joinedPG.id);
+        await AsyncStorage.setItem("pgName", joinedPG.pgName || "");
+        await AsyncStorage.setItem("pgThemeColor", joinedPG.themeColor || "#2563eb");
+
+        router.replace("/(tabs)");
+        return;
+      }
+
+      await addDoc(collection(db, "users"), {
+        authUserId: uid,
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone,
+        role: "owner",
+        image: "",
+        linkedAccount: true,
+        pgId: "",
+        activePgId: "",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      await AsyncStorage.setItem("userLoggedIn", "true");
+      await AsyncStorage.setItem("userUID", uid);
+      await AsyncStorage.setItem("userRole", "owner");
+      await AsyncStorage.setItem("role", "owner");
+      await AsyncStorage.removeItem("pgId");
+      await AsyncStorage.removeItem("activePgId");
+      await AsyncStorage.removeItem("pgName");
+      await AsyncStorage.removeItem("pgThemeColor");
+
+      router.replace("/createPG");
+    } catch (error) {
+      console.log("SIGNUP ERROR:", error);
+
+      if (error?.code === "auth/email-already-in-use") {
+        Alert.alert(
+          "Account Exists",
+          "This email is already registered. Please login instead."
+        );
+      } else if (error?.code === "auth/weak-password") {
+        Alert.alert("Weak Password", "Password should be at least 6 characters.");
+      } else {
+        Alert.alert("Signup Failed", error?.message || "Something went wrong.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const strengthColor =
+    strength === "Strong" ? "#16A34A" : strength === "Medium" ? "#F59E0B" : "#EF4444";
+
+  const isFormValid =
+    name.trim() &&
+    email.trim() &&
+    phone.trim() &&
+    password &&
+    confirmPassword &&
+    emailValid &&
+    password === confirmPassword &&
+    (selectedRole === "owner" || (room.trim() && accessCode.trim()));
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.safe}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.card}>
+          <View style={styles.headerIcon}>
+            <Ionicons name="home" size={24} color="#2563EB" />
+          </View>
+
+          <Text style={styles.title}>Create Account</Text>
+          <Text style={styles.subtitle}>
+            {selectedRole === "tenant"
+              ? "Join your PG using owner access code"
+              : "Create owner account and setup your PG"}
+          </Text>
+
+          <Text style={styles.label}>Account Type</Text>
+
+          <View style={styles.roleContainer}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.roleButton,
+                selectedRole === "tenant" && styles.activeRole,
+              ]}
+              onPress={() => setSelectedRole("tenant")}
+            >
+              <Ionicons
+                name="person-outline"
+                size={17}
+                color={selectedRole === "tenant" ? "#FFFFFF" : "#64748B"}
+              />
+              <Text
+                style={[
+                  styles.roleText,
+                  selectedRole === "tenant" && styles.activeRoleText,
+                ]}
+              >
+                Tenant
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.roleButton,
+                selectedRole === "owner" && styles.activeRole,
+              ]}
+              onPress={() => setSelectedRole("owner")}
+            >
+              <Ionicons
+                name="business-outline"
+                size={17}
+                color={selectedRole === "owner" ? "#FFFFFF" : "#64748B"}
+              />
+              <Text
+                style={[
+                  styles.roleText,
+                  selectedRole === "owner" && styles.activeRoleText,
+                ]}
+              >
+                Owner
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.label}>Full Name</Text>
+          <TextInput
+            placeholder="e.g. Angad Kumar Shaw"
+            placeholderTextColor="#94A3B8"
+            style={styles.input}
+            value={name}
+            onChangeText={setName}
+            returnKeyType="next"
+            onSubmitEditing={() => emailRef.current?.focus()}
+          />
+
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            ref={emailRef}
+            placeholder="e.g. angad@gmail.com"
+            placeholderTextColor="#94A3B8"
+            style={[styles.input, !emailValid && styles.inputError]}
+            value={email}
+            onChangeText={validateEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            returnKeyType="next"
+            onSubmitEditing={() => phoneRef.current?.focus()}
+          />
+
+          {!emailValid && <Text style={styles.error}>Invalid email</Text>}
+
+          <Text style={styles.label}>Phone Number</Text>
+          <TextInput
+            ref={phoneRef}
+            placeholder="e.g. 9876543210"
+            placeholderTextColor="#94A3B8"
+            style={styles.input}
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            returnKeyType="next"
+            onSubmitEditing={() =>
+              selectedRole === "tenant"
+                ? accessCodeRef.current?.focus()
+                : passwordRef.current?.focus()
+            }
+          />
+
+          {selectedRole === "tenant" && (
+            <>
+              <Text style={styles.label}>PG Access Code</Text>
+              <TextInput
+                ref={accessCodeRef}
+                placeholder="e.g. PG-X7K2QP"
+                placeholderTextColor="#94A3B8"
+                style={styles.input}
+                value={accessCode}
+                onChangeText={(text) => setAccessCode(text.toUpperCase())}
+                autoCapitalize="characters"
+                returnKeyType="next"
+                onSubmitEditing={() => roomRef.current?.focus()}
+              />
+
+              <Text style={styles.helperText}>
+                Enter the unique code shared by your PG owner.
+              </Text>
+
+              <Text style={styles.label}>Room Number</Text>
+              <TextInput
+                ref={roomRef}
+                placeholder="e.g. 204"
+                placeholderTextColor="#94A3B8"
+                style={styles.input}
+                value={room}
+                onChangeText={setRoom}
+                returnKeyType="next"
+                onSubmitEditing={() => passwordRef.current?.focus()}
+              />
+            </>
+          )}
+
+          <Text style={styles.label}>Password</Text>
+          <View style={styles.passwordRow}>
+            <TextInput
+              ref={passwordRef}
+              placeholder="Create password"
+              placeholderTextColor="#94A3B8"
+              secureTextEntry={!showPassword}
+              style={styles.passwordInput}
+              value={password}
+              returnKeyType="next"
+              onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+              onChangeText={(text) => {
+                setPassword(text);
+                setStrength(checkStrength(text));
+              }}
+            />
+
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+              <Ionicons
+                name={showPassword ? "eye" : "eye-off"}
+                size={22}
+                color="#64748B"
+              />
+            </TouchableOpacity>
+          </View>
+
+          {password.length > 0 && (
+            <>
+              <Text style={[styles.strengthText, { color: strengthColor }]}>
+                Strength: {strength}
+              </Text>
+
+              <View style={styles.strengthBar}>
+                <View
+                  style={[
+                    styles.strengthFill,
+                    {
+                      width:
+                        strength === "Strong"
+                          ? "100%"
+                          : strength === "Medium"
+                          ? "60%"
+                          : "30%",
+                      backgroundColor: strengthColor,
+                    },
+                  ]}
+                />
+              </View>
+            </>
+          )}
+
+          <Text style={styles.label}>Confirm Password</Text>
+
+          <View style={styles.passwordRow}>
+            <TextInput
+              ref={confirmPasswordRef}
+              placeholder="Re-enter password"
+              placeholderTextColor="#94A3B8"
+              secureTextEntry={!showPassword}
+              style={styles.passwordInput}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              returnKeyType="done"
+              onSubmitEditing={handleSignup}
+            />
+
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+              <Ionicons
+                name={showPassword ? "eye" : "eye-off"}
+                size={22}
+                color="#64748B"
+              />
+            </TouchableOpacity>
+          </View>
+
+          {confirmPassword.length > 0 && (
+            <Text
+              style={[
+                styles.matchText,
+                { color: password === confirmPassword ? "#16A34A" : "#EF4444" },
+              ]}
+            >
+              {password === confirmPassword
+                ? "Passwords match"
+                : "Passwords do not match"}
+            </Text>
+          )}
+
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={[styles.button, (!isFormValid || loading) && styles.disabledButton]}
+            onPress={handleSignup}
+            disabled={!isFormValid || loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.buttonText}>
+                {selectedRole === "tenant" ? "Join PG" : "Create Owner Account"}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => router.push("/login")}>
+            <Text style={styles.link}>
+              Already have an account? <Text style={styles.bold}>Log In</Text>
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+  },
+
+  container: {
+    flexGrow: 1,
+    padding: 18,
+    paddingTop: 34,
+    paddingBottom: 70,
+    justifyContent: "center",
+  },
+
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+
+  headerIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 19,
+    backgroundColor: "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    marginBottom: 12,
+  },
+
+  title: {
+    fontSize: 27,
+    fontWeight: "900",
+    textAlign: "center",
+    color: "#0F172A",
+    letterSpacing: -0.7,
+  },
+
+  subtitle: {
+    fontSize: 13,
+    color: "#64748B",
+    textAlign: "center",
+    marginTop: 6,
+    marginBottom: 24,
+    lineHeight: 19,
+    fontWeight: "600",
+  },
+
+  label: {
+    fontSize: 13,
+    marginBottom: 7,
+    color: "#334155",
+    fontWeight: "800",
+  },
+
+  input: {
+    backgroundColor: "#F8FAFC",
+    paddingHorizontal: 14,
+    height: 49,
+    borderRadius: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+
+  inputError: {
+    borderColor: "#EF4444",
+  },
+
+  helperText: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: -7,
+    marginBottom: 13,
+    fontWeight: "600",
+  },
+
+  roleContainer: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 18,
+  },
+
+  roleButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#F8FAFC",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+
+  activeRole: {
+    backgroundColor: "#2563EB",
+    borderColor: "#2563EB",
+  },
+
+  roleText: {
+    fontWeight: "900",
+    color: "#475569",
+    fontSize: 13,
+  },
+
+  activeRoleText: {
+    color: "#FFFFFF",
+  },
+
+  passwordRow: {
+    height: 49,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 16,
+    marginBottom: 14,
+    backgroundColor: "#F8FAFC",
+    paddingRight: 13,
+  },
+
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+
+  strengthText: {
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: -5,
+    marginBottom: 7,
+  },
+
+  strengthBar: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 999,
+    marginBottom: 15,
+    overflow: "hidden",
+  },
+
+  strengthFill: {
+    height: 6,
+    borderRadius: 999,
+  },
+
+  matchText: {
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: -5,
+    marginBottom: 4,
+  },
+
+  button: {
+    backgroundColor: "#2563EB",
+    height: 52,
+    borderRadius: 18,
+    marginTop: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  disabledButton: {
+    backgroundColor: "#94A3B8",
+  },
+
+  buttonText: {
+    color: "#FFFFFF",
+    textAlign: "center",
+    fontWeight: "900",
+    fontSize: 15,
+  },
+
+  link: {
+    textAlign: "center",
+    marginTop: 18,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+
+  bold: {
+    fontWeight: "900",
+    color: "#2563EB",
+  },
+
+  error: {
+    color: "#EF4444",
+    marginTop: -8,
+    marginBottom: 10,
+    fontWeight: "700",
+    fontSize: 12,
+  },
+});
